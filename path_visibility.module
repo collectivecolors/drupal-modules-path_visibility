@@ -1,0 +1,534 @@
+<?php
+// $Id$
+
+/*
+ * @file
+ * 
+ * Defines a CCK field that contains an internal path or a path pattern, along 
+ * with a views argument that filters content down where the field pattern 
+ * matches the given path argument.
+ * 
+ * This module also defines a ctools context plugin for paths so we can easily
+ * pass the current path into a view argument, allowing us to filter posts
+ * down to the page or group of pages.
+ */
+
+/******************************************************************************
+ * Drupal Hooks                                                               *
+ ******************************************************************************/ 
+
+/**
+ * Implementation of hook_theme().
+ */
+function path_visibility_theme() {
+  return array(
+    'pathfield' => array(
+      'arguments' => array('element' => NULL),
+    ),
+    'pathfield_field_settings' => array(
+      'arguments' => array('element' => NULL),
+    ),
+    'pathfield_widget_settings' => array(
+      'arguments' => array('element' => NULL),
+    ),
+    'pathfield_formatter_default' => array(
+      'arguments' => array('element' => NULL),
+    ),
+    'pathfield_formatter_link' => array(
+      'arguments' => array('element' => NULL),
+    ),
+  );
+}
+
+/**
+ * Implementation of hook_elements().
+ */
+function path_visibility_elements() {
+  $elements = array();
+  $elements['pathfield'] =  array(
+    '#input' => TRUE,
+    '#process' => array('pathfield_element_process'),
+  );
+  return $elements;
+}
+
+/******************************************************************************
+ * CCK Hooks                                                                  *
+ ******************************************************************************/ 
+
+/**
+ * Implementation of hook_field_info().
+ */
+function path_visibility_field_info() {
+  return array(
+    'pathfield' => array(
+      'label' => t('Path pattern'),
+      'description' => t('Store a path or pattern representing a group a pages.'),
+    ),
+  );
+}
+
+/**
+ * Implementation of hook_field_settings().
+ */
+function path_visibility_field_settings($op, $field) {
+  switch ($op) {
+    case 'form':
+      
+      $form = array(
+        '#theme' => 'pathfield_field_settings',
+      );      
+      $form['path_weight'] = array(
+        '#type' => 'weight',
+        '#title' => t('Lowest weight possible for paths of this field'),
+        '#default_value' => ($field['path_weight'] ? $field['path_weight'] : 0),
+        '#delta' => 20,
+        '#description' => t('The weight of a path for this field if there are no wildcards present.  Every wildcard increases the weight of the path relative to other path fields.'),
+      );      
+      return $form;
+
+    case 'validate':
+      break;
+
+    case 'save':
+      return array('path_weight');
+
+    case 'database columns':
+      return array(
+        'path' => array('type' => 'varchar', 'length' => 255, 'not null' => FALSE, 'sortable' => TRUE, 'views' => TRUE),
+        'regexp' => array('type' => 'varchar', 'length' => 255, 'not null' => FALSE, 'sortable' => TRUE, 'views' => TRUE),
+        'negate' => array('type' => 'int', 'size' => 'tiny', 'not null' => FALSE, 'views' => TRUE),
+        'weight' => array('type' => 'int', 'not null' => FALSE, 'sortable' => TRUE, 'views' => TRUE),        
+      );
+
+    case 'views data':
+      module_load_include('inc', 'path_visibility', 'includes/views/path_visibility.views');
+      return pathfield_views_data($field);
+  }
+}
+
+/**
+ * Implementation of hook_content_is_empty().
+ */
+function path_visibility_content_is_empty($item, $field) {
+  if (empty($item['path'])) {
+    return TRUE;
+  }
+  return FALSE;
+}
+
+/**
+ * Implementation of hook_field().
+ */
+function path_visibility_field($op, &$node, $field, &$items, $teaser, $page) {
+  switch ($op) {
+    case 'load':
+      return _pathfield_load($field, $items);
+
+    case 'validate':
+      foreach ($items as $delta => $value) {
+        _pathfield_validate($items[$delta], $delta, $field, $node);
+      }
+      break;
+  
+    case 'insert':
+    case 'update':
+      foreach ($items as $delta => $value) {
+        _pathfield_save($items[$delta], $delta, $field, $node);
+      }
+      break;
+
+    case 'sanitize':
+      foreach ($items as $delta => $value) {
+        _pathfield_sanitize($items[$delta], $delta, $field, $node);
+      }
+      break;
+  }
+}
+
+/**
+ * Implementation of hook_widget_info().
+ */
+function path_visibility_widget_info() {
+  return array(
+    'pathfield' => array(
+      'label' => 'Path input',
+      'field types' => array('pathfield'),
+      'multiple values' => CONTENT_HANDLE_CORE,
+    ),
+  );
+}
+
+/**
+ * Implementation of hook_widget_settings().
+ */
+function path_visibility_widget_settings($op, $widget) {
+  switch ($op) {
+    case 'form':      
+      
+      // Store some settings in the form so we can change them for each field instance.
+      $form = array(
+        '#theme' => 'pathfield_widget_settings',
+      );
+      $form['path_hide'] = array(
+        '#type' => 'checkbox',
+        '#title' => t('Hide and self reference'),
+        '#default_value' => $widget['path_hide'],
+        '#description' => t('If checked, the path field will be hidden and pre populated with the path of the node.'),
+      );
+      return $form;
+      
+    case 'validate':
+      break;
+
+    case 'save':
+      return array('path_hide');
+  }
+}
+
+/**
+ * Implementation of hook_widget().
+ */
+function path_visibility_widget(&$form, &$form_state, $field, $items, $delta = 0) {
+  
+  if ($field['widget']['path_hide']) {
+    return array(
+      'path' => array('#type' => 'value', '#value' => ''),
+    );  
+  }
+  $element = array(
+    '#type' => $field['widget']['type'],
+    '#default_value' => isset($items[$delta]) ? $items[$delta] : '',
+    '#title' => $field['widget']['label'],
+    '#weight' => $field['widget']['weight'],
+    '#description' => $field['widget']['description'],
+    '#required' => $field['required'],
+    '#field' => $field,
+  );
+  return $element;
+}
+
+/**
+ * Implementation of hook_field_formatter_info().
+ */
+function path_visibility_field_formatter_info() {
+  return array(
+    'default' => array(
+      'label' => t('Path, as text'),
+      'field types' => array('pathfield'),
+      'multiple values' => CONTENT_HANDLE_CORE,
+    ),
+    'link' => array(
+      'label' => t('Path, as link'),
+      'field types' => array('pathfield'),
+      'multiple values' => CONTENT_HANDLE_CORE,
+    ),
+  );
+}
+
+/******************************************************************************
+ * Views Hooks                                                                *
+ ******************************************************************************/ 
+
+/**
+ * Implementation of hook_views_api().
+ */
+function path_visibility_views_api() {
+  return array(
+    'api'  => 2,
+    'path' => drupal_get_path('module', 'path_visibility') . '/includes/views',
+  );
+}
+
+/******************************************************************************
+ * CTools Hooks                                                               *
+ ******************************************************************************/ 
+
+/**
+ * Implementation of hook_ctools_plugin_directory().
+ */
+function path_visibility_ctools_plugin_directory($module, $plugin) {
+  if (($module == 'page_manager' || $module == 'ctools') && !empty($plugin)) {
+    return "plugins/$plugin";
+  }
+}
+
+/******************************************************************************
+ * Callbacks                                                                  *
+ ******************************************************************************/ 
+
+/**
+ * Process the path type element before displaying the field.
+ *
+ * Build the form element. When creating a form using FAPI #process,
+ * note that $element['#value'] is already set.
+ *
+ * The $fields array is in $form['#field_info'][$element['#field_name']].
+ */
+function pathfield_element_process($element, $edit, $form_state, $form) {
+   
+  $field  = $form['#field_info'][$element['#field_name']];
+  $delta = $element['#delta'];
+  
+  $element['path_help'] = array(
+  	'#type' => 'markup',
+   	'#value' => '<p>' . $element['#description'] . '</p>',
+  );   
+  $element['path'] = array(
+   	'#type' => 'textfield',
+   	'#maxlength' => '255',
+   	'#title' => t('Path pattern'),
+   	'#required' => ($delta == 0 && $field['path']) ? $element['#required'] : FALSE,
+   	'#default_value' => isset($element['#value']['path']) ? $element['#value']['path'] : NULL,
+   	'#description' => 
+      t(  'Enter an internal site path.  You may use wildcards to represent one or more unknown characters.<br/><br/>'
+        . ' [ * ]     = Match any number of characters<br/>'
+        . ' [ + ]     = Match at least one character<br/>'
+        . ' [ ? ]    = Match any number of characters until the next [ / ]<br/>'
+        . ' [ ^ ]    = Match at least one character until the next [ / ]<br/>'
+        . ' [ (...) ] = Match an optional group of characters  (NOTE: <b>Nesting of parentheses is not currently supported</b>)<br/><br/>'
+        . ' Pattern symbols can be escaped [ \* ] if the path contains the pattern character.'
+      ),
+  );
+  $element['negate'] = array(
+  	'#type' => 'checkbox',
+  	'#title' => t('Negate'),
+  	'#default_value' => isset($element['#value']['negate']) ? $element['#value']['negate'] : 0,
+  	'#description' => t('If checked, views queries will only be matched if the argument does not match the path or path pattern'),
+  );
+  return $element;
+}
+
+/******************************************************************************
+ * Theme Functions                                                            *
+ ******************************************************************************/ 
+
+/**
+ * FAPI theme for an individual text elements.
+ */
+function theme_pathfield($element) {
+  //drupal_add_css(drupal_get_path('module', 'pathfield') .'/css/element.css');
+
+  // Prefix single value link fields with the name of the field.
+  if (empty($element['#field']['multiple'])) {
+    if (isset($element['path'])) {
+      $element['path']['#title'] = $element['#title'];
+    }
+  }
+
+  $output = '<div class="pathfield-field clear-block">'
+  				. theme('markup', $element['path_help'])
+          . '<div class="pathfield-field-path'. (isset($element['title']) ? ' pathfield-field-column' : '') .'">'
+          . theme('textfield', $element['path']) 
+          . '</div>'
+          . '<div class="pathfield-field-negate'. (isset($element['title']) ? ' pathfield-field-column' : '') .'">'
+          . theme('checkbox', $element['negate'])
+          . '</div>';
+          
+  return $output;
+}
+
+/**
+ * Theme the settings form for the path field.
+ */
+function theme_pathfield_field_settings($form) {
+  
+  // No modifications that I can think of.
+  return drupal_render($form);
+}
+
+/**
+ * Theme the settings form for the path field widget.
+ */
+function theme_pathfield_widget_settings($form) {
+  
+  // No modifications that I can think of.
+  return drupal_render($form);
+}
+
+/**
+ * Theme function for 'default' path field formatter.
+ */
+function theme_pathfield_formatter_default($element) {
+  return check_plain($element['#item']['path']);
+}
+
+/**
+ * Theme function for 'link' path field formatter.
+ */
+function theme_pathfield_formatter_link($element) {
+  global $base_url;
+  
+  $info = _pathfield_internalize_pattern($element['#item']['path']);
+  
+  if ($info->patterns) {
+  	return theme('pathfield_formatter_default', $element);
+  }
+  
+  $url = $base_url . '/' . $element['#item']['path'];  
+  return l($element['#item']['path'], $url, $element['#item']);
+}
+
+/******************************************************************************
+ * Auxillary Functions                                                        *
+ ******************************************************************************/ 
+
+/**
+ * Load path data.   hook_nodeapi($op = 'load')
+ */
+function _pathfield_load($field, &$items) {
+  return array($field['field_name'] => $items);
+}
+
+/**
+ * Validate an internal path.   hook_nodeapi($op = 'validate')
+ */
+function _pathfield_validate(&$item, $delta, $field, $node) {
+  
+  if ($item['path'] 
+      && !(isset($field['widget']['default_value'][$delta]['path']) 
+          && $item['path'] == $field['widget']['default_value'][$delta]['path'] 
+          && !$field['required'])) {
+            
+    // Validate the link.
+    if (_pathfield_validate_path(_pathfield_cleanup_path($item['path'])) == FALSE) {
+      form_set_error($field['field_name'] .']['. $delta .'][path', t('Not a valid internal path pattern.'));
+    }    
+  }
+}
+
+/**
+ * Save field values.   hook_nodeapi($op = 'insert' | $op = 'update')
+ * 
+ * This is needed because we do not know the $nid in the process function 
+ * on node insert.  This should be called after the nid has been set.
+ */
+function _pathfield_save(&$item, $delta = 0, $field, &$node) {
+  
+  if ($field['widget']['path_hide']) {
+    $input_path = 'node/' . $node->nid . '(/+)';
+  }
+  else {
+    $input_path = _pathfield_cleanup_path($item['path']);
+  }
+  
+  $info = _pathfield_internalize_pattern($input_path, $field['path_weight']);
+    
+  $item['path']   = $info->input;
+  $item['regexp'] = $info->translation;
+  $item['negate'] = ($field['widget']['path_hide'] ? 0 : $item['negate']);
+  $item['weight'] = ($field['widget']['path_hide'] ? $field['path_weight'] : $info->weight);
+}
+
+/**
+ * Cleanup user-entered values for a pathfield field according to field settings.   hook_nodeapi($op = 'view')
+ */
+function _pathfield_sanitize(&$item, $delta, &$field, &$node) {
+  
+	// Don't try to process empty paths.
+  if (empty($item['path'])) {
+    return;
+  }
+  
+  // Save the new path without extra garbage(whatever that may be).
+  $item['path'] = _pathfield_cleanup_path($item['path']);
+
+  // Add the widget label.
+  $item['label'] = $field['widget']['label'];
+}
+
+/**
+ * Cleans up an internal path.
+ */
+function _pathfield_cleanup_path($path) {
+	
+  // Trim whitespace and slashes from the beginning and end of path.
+  $path = preg_replace(array('/\s+/', '/^\//', '/\/$/'), '', $path);
+  return $path;
+}
+
+/**
+ * Make sure the path exists within Drupal.
+ */
+function _pathfield_validate_path($text, $allow_pattern = TRUE) {
+	
+	// Let wildcard paths slide through.
+	$info = _pathfield_internalize_pattern($text);
+	if ($allow_pattern && $info->patterns) {
+		return TRUE;
+	}
+		
+	// Make sure we are checking the source path, since we could enter an alias in the interface.
+	$path = drupal_get_normal_path($text);
+	
+	// We may not have a valid path yet.  Check the menu item.
+	return (menu_get_item($path) ? TRUE : FALSE);
+}
+
+/**
+ * Translate a path pattern from user formatting to database formatting
+ * and calculate the relative weight.
+ * 
+ * We only save the database format in the database so we can make querying
+ * easier.
+ */
+function _pathfield_internalize_pattern($pattern, $default_weight = 0) {
+  
+  $info = new stdClass();
+  $info->input = $pattern;
+  
+  // Escape all SQL REGEXP characters we don't use.
+  $translation = preg_replace('/(?<!\\\\)([\$\.\|\-\=\:\<\>\[\]\{\}])/',  
+                              '\\\\$1', 
+                              $pattern);      
+      
+  // Translate the pattern language into SQL REGEXP.
+  $info->optional_patterns = 0;
+  $translation    = preg_replace('/(?<!\\\\)\((.*)(?<!\\\\)\)/', '($1)?', 
+                                 $translation, -1, $info->optional_patterns);
+                              
+  $info->section_patterns = 0;
+  $translation = preg_replace(
+    array(
+      '/(?<![\)\\\\])\?/',
+      '/(?<![\[\\\\])\^/',
+    ),
+    array(
+      '[^/]*',
+      '[^/]+',
+    ),
+    $translation, -1, $info->section_patterns
+  );
+  
+  $info->global_patterns = 0;                             
+  $translation  = preg_replace(
+    array(
+      '/(?<![\]\\\\])\*/',
+      '/(?<![\]\\\\])\+/',
+    ),
+    array(
+      '.*',
+      '.+',
+    ),
+    $translation, -1, $info->global_patterns
+  ); 
+  
+  $info->translation = "^$translation\$";
+  $info->patterns    = $info->optional_patterns 
+                     + $info->section_patterns 
+                     + $info->global_patterns;
+                     
+  // Formulate weight.
+  
+  $weighted_patterns = ($info->optional_patterns * 1)
+                     + ($info->section_patterns * 3)
+                     + ($info->global_patterns * 6);
+    
+  $generality_index = $weighted_patterns / strlen($info->input) / 6; // between 0 and 1
+  $default_weight   = ($default_weight ? $default_weight : 0);
+                     
+  $info->weight = $default_weight + ($generality_index * 100);
+  
+  return $info;
+}
+

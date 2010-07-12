@@ -1,0 +1,8 @@
+name = Path Visibility
+description = Defines an internal path field, a view argument, and ctools context used for filtering views content within panels based on path.
+package = CCK
+dependencies[] = content
+dependencies[] = views
+dependencies[] = ctools
+dependencies[] = page_manager
+core = 6.x

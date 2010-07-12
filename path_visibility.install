@@ -1,0 +1,39 @@
+<?php
+// $Id$
+
+/**
+ * @file
+ * Install file for the path_visibility module.
+ */
+
+/**
+ * Implementation of hook_install().
+ */
+function path_visibility_install() {
+  drupal_load('module', 'content');
+  content_notify('install', 'path_visibility');
+}
+
+/**
+* Implementation of hook_uninstall().
+*/
+function path_visibility_uninstall() {
+  drupal_load('module', 'content');
+  content_notify('uninstall', 'path_visibility');
+}
+
+/**
+* Implementation of hook_enable().
+*/
+function path_visibility_enable() {
+  drupal_load('module', 'content');
+  content_notify('enable', 'path_visibility');
+}
+
+/**
+* Implementation of hook_disable().
+*/
+function path_visibility_disable() {
+  drupal_load('module', 'content');
+  content_notify('disable', 'path_visibility');
+}
